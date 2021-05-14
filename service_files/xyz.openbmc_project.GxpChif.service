@@ -1,0 +1,12 @@
+[Unit]
+Description=GXP CHIF service
+After=dbus.service
+
+[Service]
+Restart=always
+RestartSec=5
+ExecStart=/usr/bin/chif
+
+[Install]
+WantedBy=multi-user.target
+

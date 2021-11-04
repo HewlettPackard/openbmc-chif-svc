@@ -1,9 +1,43 @@
-cmake_minimum_required (VERSION 2.6)
+cmake_minimum_required (VERSION 3.2)
 project(chif)
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-add_executable(chif src/main.c)
-install(TARGETS chif RUNTIME DESTINATION bin)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(SERVICE_FILE_SRC_DIR ${PROJECT_SOURCE_DIR}/service_files)
-install(FILES ${SERVICE_FILE_SRC_DIR}/xyz.openbmc_project.GxpChif.service DESTINATION /lib/systemd/system/)
+include(GNUInstallDirs)
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+link_directories (${DBUSINTERFACE_LIBRARIES})
+
+find_package (PkgConfig REQUIRED)
+
+pkg_check_modules (SYSTEMD libsystemd REQUIRED)
+include_directories (${SYSTEMD_INCLUDE_DIRS})
+link_directories (${SYSTEMD_LIBRARY_DIRS})
+
+# import sdbusplus
+pkg_check_modules(SDBUSPLUSPLUS sdbusplus REQUIRED)
+include_directories(${SDBUSPLUSPLUS_INCLUDE_DIRS})
+link_directories(${SDBUSPLUSPLUS_LIBRARY_DIRS})
+find_program(SDBUSPLUSPLUS sdbus++)
+
+# phosphor-dbus-interfaces
+pkg_check_modules(DBUSINTERFACE phosphor-dbus-interfaces REQUIRED)
+include_directories(${DBUSINTERFACE_INCLUDE_DIRS})
+link_directories(${DBUSINTERFACE_LIBRARY_DIRS})
+
+# import phosphor-logging
+pkg_check_modules(LOGGING phosphor-logging REQUIRED)
+include_directories(${LOGGING_INCLUDE_DIRS})
+link_directories(${LOGGING_LIBRARY_DIRS})
+
+add_executable(chif src/main.cpp src/smif.cpp src/sysrom.cpp src/ev.cpp)
+target_link_libraries(${PROJECT_NAME} systemd)
+target_link_libraries(${PROJECT_NAME} "${SDBUSPLUSPLUS_LIBRARIES} -lstdc++fs")
+target_link_libraries(${PROJECT_NAME} ${DBUSINTERFACE_LIBRARIES})
+target_link_libraries(${PROJECT_NAME} phosphor_logging)
+
+set(SERVICE_FILES ${PROJECT_SOURCE_DIR}/service_files/xyz.openbmc_project.GxpChif.service)
+
+install(TARGETS ${PROJECT_NAME} DESTINATION bin)
+install(FILES ${SERVICE_FILES} DESTINATION /lib/systemd/system/)

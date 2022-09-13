@@ -9,6 +9,7 @@ include(GNUInstallDirs)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 link_directories (${DBUSINTERFACE_LIBRARIES})
 
+set(PKG_CONFIG_EXECUTABLE "/usr/bin/pkg-config")
 find_package (PkgConfig REQUIRED)
 
 pkg_check_modules (SYSTEMD libsystemd REQUIRED)

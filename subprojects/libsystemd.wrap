@@ -1,0 +1,4 @@
+[wrap-git]
+directory=sdbusplus
+url=https://github.com/systemd/systemd.git
+revision=main

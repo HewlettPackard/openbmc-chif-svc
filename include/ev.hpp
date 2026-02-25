@@ -19,16 +19,24 @@
 
 #ifndef __EV_H__
 #define __EV_H__
+
+#define EV_NAME_MAX_LEN	32
+#define EV_FILE_MAX_SIZE (64 * 1024) //unit byte
+#define EV_FILE_HEADER	 64 //unit byte
+#define EV_MAX_LEN			4000
+#define EV_HEAD_LEN 		(EV_NAME_MAX_LEN+2)
+#define EV_DATA_MAX_LEN	(EV_MAX_LEN - EV_HEAD_LEN)
+
 struct node {
         struct node *forward;
         struct node *backward;
-        char name[32];
+        char name[EV_NAME_MAX_LEN];
         long offset;
 };
 
 struct ev {
         uint16_t size;
-        char name[32];
+        char name[EV_NAME_MAX_LEN];
 };
 
 extern int EVError;
@@ -42,12 +50,4 @@ int setEV(char *name, char *data, int data_len);
 int delEV(char *name);
 int clearEV(void);
 void printEVs(void);
-
-#define EV_FILE_MAX_SIZE (64 * 1024) //unit byte
-#define EV_FILE_HEADER	 64 //unit byte
-#define EV_MAX_LEN			4000
-#define EV_NAME_MAX_LEN	32
-#define EV_HEAD_LEN 		(EV_NAME_MAX_LEN+2)
-#define EV_DATA_MAX_LEN	(EV_MAX_LEN - EV_HEAD_LEN)
-
 #endif

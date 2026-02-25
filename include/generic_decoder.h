@@ -24,13 +24,9 @@
 #include "logs.h"
 
 typedef enum {
-    EVT_GEN_DATA_ID = 0,
     EVT_ACT_DATA_ID = 1,
     EVT_DESC_DATA_ID = 2,
     EVT_VAR_DATA_ID = 3,
-    EVT_TRAP_DATA_ID = 4,
-    EVT_RIS_ALERT_DATA_ID = 5,
-    EVT_SER_EVENT_DATA_ID = 6,
     EVT_DATA_MAX
 } DATA_EXTRACT_ID;
 

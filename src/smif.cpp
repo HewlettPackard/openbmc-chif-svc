@@ -27,6 +27,8 @@
 #include "ev.hpp"
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
 #include <netinet/in.h>
 #include <net/if.h>
 #include <arpa/inet.h>
@@ -58,6 +60,15 @@
 
 #define SERIAL_NUMBER_LEN 20
 #define BUFFER_8153 256
+
+#define IPV6_ADDR_LEN 16
+#define MAX_IPV6_ADDRS 12
+#define IPV6_STATIC  0
+#define IPV6_SLAAC   1
+#define IPV6_DHCPv6  2
+#define NETLINK_MSG_BUFSIZE 8192
+
+
 struct pkt_8002 {
 	uint32_t ErrorCode;
 	uint16_t status_word;
@@ -243,22 +254,19 @@ struct pkt_811c {
 struct pkt_0120 {
 } __attribute__ ((packed));
 
+struct ipv6Addr {
+    uint8_t addr[IPV6_ADDR_LEN];
+    uint8_t prefixLen;
+    uint8_t source;
+    uint8_t state;
+    uint8_t reserved;
+} __attribute__ ((packed));
+
 struct pkt_8120 {
     uint32_t ErrorCode; // EV Error/Return Code
 	uint32_t IPv6Option; // 1 IPv6 enabled, 2 IPv4 enabled
 	uint32_t DHCPv6RA;
-	uint8_t IPv6_1[20];
-	uint8_t IPv6_2[20];
-	uint8_t IPv6_3[20];
-	uint8_t IPv6_4[20];
-	uint8_t IPv6_5[20];
-	uint8_t IPv6_6[20];
-	uint8_t IPv6_7[20];
-	uint8_t IPv6_8[20];
-	uint8_t IPv6_9[20];
-	uint8_t IPv6_10[20];
-	uint8_t IPv6_11[20];
-	uint8_t IPv6_12[20];
+    struct ipv6Addr ipv6Addrs[MAX_IPV6_ADDRS];
 	uint32_t reserved[5];
 	uint8_t IPv6_DNSPrimary[20];
 	uint8_t IPv6_DNSSecondary[20];
@@ -1188,14 +1196,150 @@ int SmifPkt_0088(void *recv, void *resp)
     return respPkt->header.pkt_size;
 }
 
+/*
+ * Examine the IFA flags and give a best guess at the assignment type.
+ */
+int inferSource(uint8_t *addr, uint32_t flags)
+{
+    if (flags & (IFA_F_TEMPORARY | IFA_F_MANAGETEMPADDR | IFA_F_NOPREFIXROUTE))
+        return IPV6_SLAAC;
+    if (addr[0] == 0xfe && (addr[1] & 0xc0) == 0x80) // Link-local is always slaac
+        return IPV6_SLAAC;
+    if (flags & IFA_F_PERMANENT)
+        return IPV6_STATIC;
+
+    // If none of the above, assume DHCPv6
+    return IPV6_DHCPv6;
+}
+
+/*
+ * This parses through the netlink messages looking for ipv6 addresses on eth0.
+ */
+bool parseIpv6Addresses(struct ipv6Addr *ipv6Addrs, struct nlmsghdr *nlh, int len)
+{
+    int addr=0;  // keeps track of how many addresses have been found.
+
+    for (; NLMSG_OK(nlh, len); nlh = NLMSG_NEXT(nlh, len)) {
+        if (nlh->nlmsg_type == NLMSG_DONE)
+            break;
+        if (nlh->nlmsg_type == NLMSG_ERROR)
+            continue;
+        if (nlh->nlmsg_type != RTM_NEWADDR)
+            continue;
+
+        struct ifaddrmsg *ifa = (struct ifaddrmsg *)NLMSG_DATA(nlh);
+        if (ifa->ifa_family != AF_INET6)            // only ipv6
+            continue;
+
+        char ifname[IF_NAMESIZE] = {0};
+        if_indextoname(ifa->ifa_index, ifname);
+        if (strcmp(ifname, "eth0") != 0)            // only eth0
+            continue;
+
+        int attrlen = nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*ifa));
+        struct rtattr *rta = IFA_RTA(ifa);
+
+        for (; RTA_OK(rta, attrlen); rta = RTA_NEXT(rta, attrlen)) {
+            switch (rta->rta_type) {
+                // We're only interested in these two parts of the message.
+                case IFA_ADDRESS:
+                    {
+                        // IPv6 address and prefix length
+                        memcpy(ipv6Addrs[addr].addr, (uint8_t *)RTA_DATA(rta), IPV6_ADDR_LEN);
+                        hexdump(ipv6Addrs[addr].addr, IPV6_ADDR_LEN);
+                        ipv6Addrs[addr].prefixLen = ifa->ifa_prefixlen;
+                        dbPrintf("prefixLen: %d\n",  ipv6Addrs[addr].prefixLen);
+                    }
+                    break;
+
+                case IFA_FLAGS:  // The IFA_ADDRESS always shows up first in the message
+                                 // so the address will be set before we get here.
+                    // Extended flags (32-bit)
+                    uint32_t extFlags = *(uint32_t *)RTA_DATA(rta);
+                    dbPrintf("Extended flags: 0x%x\n", extFlags);
+                    ipv6Addrs[addr].source = inferSource(ipv6Addrs[addr].addr, extFlags);
+                    dbPrintf("source: %d\n", ipv6Addrs[addr].source);
+                    break;
+            }
+        }
+        addr++;  // we found one, so inc to the next slot
+        dbPrintf("------\n");
+        if (addr >= MAX_IPV6_ADDRS) {
+            break;  // We've hit our max, bail.
+        }
+    }
+    if (addr)
+        return true;
+    else
+        return false;
+}
+
+/*
+ * Setup the socket call and retrieve the list of ipv6 addresses.
+ */
+bool findIpv6Addrs(struct ipv6Addr *ipv6Addrs)
+{
+    int sock = socket(PF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+    if (sock < 0) {
+        dbPrintf("SMIF: IPV6 socket error\n");
+        return false;
+    }
+
+    struct {
+        struct nlmsghdr nlh;
+        struct ifaddrmsg ifa;
+    } req;
+
+    memset(&req, 0, sizeof(req));
+    req.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifaddrmsg));
+    req.nlh.nlmsg_type = RTM_GETADDR;
+    req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;  // request all addresses
+    req.nlh.nlmsg_seq = 1;
+    req.ifa.ifa_family = AF_INET6;  // only ipv6
+
+    struct sockaddr_nl sa = {0,0,0,0};
+    sa.nl_family = AF_NETLINK;
+
+    if (sendto(sock, &req, req.nlh.nlmsg_len, 0, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+        dbPrintf("SMIF: IPV6 socket sendto error\n");
+        close(sock);
+        return false;
+    }
+
+    char buf[NETLINK_MSG_BUFSIZE];
+    int len = recv(sock, buf, sizeof(buf), 0);
+    close(sock);
+    if (len < 0) {
+        dbPrintf("SMIF: IPV6 socket receive error\n");
+        return false;
+    }
+	
+    return (parseIpv6Addresses(ipv6Addrs, (struct nlmsghdr *)buf, len));
+}
+
 /* 
- * Get iLO IPv6 configuration
+ * Get iLO IPv6 configuration.
+
+ *   This is the IPv6 Address Field Content Map described in the SMIF Programmers Guide
+ *   for Packet 0x0120.
+ *   It describes the IPv6_1 member of the the pkt_8120 stucture.
+ *
+ *   Offset  Size        Description     Value
+ *   0x00:   16 * UINT8  Address         MSB is first, LSB is last
+ *   0x10:   UINT8       Address         Prefix Length   5-128
+ *   0x11:   UINT8       Address Source  0   = Static
+ *                                       1   = State-Less    Address Auto-Configuration
+ *                                             (SLAAC)
+ *                                       2   = DHCPv6 all others reserved
+ *   0x12:   UINT8       Current State   0   = Active
+ *                                       1   = Pending
+ *                                       2   = Failed 255 = Unknown all others reserved
+ *   0x13:   UINT8       Reserved        0x00
  */
 int SmifPkt_0120(void *recv, void *resp)
 {
     struct ChifPkt *recvPkt = (struct ChifPkt *)recv;
     struct ChifPkt *respPkt = (struct ChifPkt *)resp;
-//    struct pkt_0120 *recvMsg = (struct pkt_0120 *)&recvPkt->msg[0];
     struct pkt_8120 *respMsg = (struct pkt_8120 *)&respPkt->msg[0];
 
     respPkt->header.pkt_size = sizeof(struct ChifPktHeader) + sizeof(struct pkt_8120);
@@ -1203,10 +1347,24 @@ int SmifPkt_0120(void *recv, void *resp)
     respPkt->header.command = 0x8120;
     respPkt->header.service_id = 0;
 
+    /* go get the IPV6 information if present */
+    if (findIpv6Addrs(respMsg->ipv6Addrs)) {
+
+        dbPrintf("IPV6 found\n ");
+
+        respMsg->ErrorCode = 0;
+        respMsg->IPv6Option = 3;  // ipv6 and ppv4 active.
+        respMsg->iLOIPPOST = 2;   // display both ipv4 and ipv6 addresses.
+
+    } else {
+
+        dbPrintf("IPV6 not found\n ");
+
     // no active ipv6 
     respMsg->ErrorCode = 1;
-    respMsg->IPv6Option = 0;
-	respMsg->iLOIPPOST = 0;
+    respMsg->IPv6Option = 0; // only ipv4 active.
+        respMsg->iLOIPPOST = 0; // display only ipv4.
+    }
 
     return respPkt->header.pkt_size;
 }
@@ -2132,6 +2290,10 @@ int SmifHandler(void *recv, void *resp)
         case 0x0202:
             dbPrintf("smif_0x0202: Fetch and send APML records\n");
             return SmifPkt_0202(recv, resp);
+
+        case 0x0204:
+            dbPrintf("smif_0x0204: Receive measurement info from BIOS\n");
+            return SmifPkt_not_implemented(recv, resp, 0);
 
         case 0x0209:
             dbPrintf("smif_0x0209: Get BootProgress Policy from BIOS\n");

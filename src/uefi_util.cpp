@@ -92,14 +92,6 @@ UEFI_RC uefi_util_platdef_store(void)
         return UEFI_RC_ERROR;
     }
 
-    // seek past the initial header.
-    if (fseek(fptr, 32, SEEK_SET)) {
-        printf("PLATDEF: Failed to seek to data in platdef file\n");
-        free(platdef_tmp);
-        fclose(fptr);
-        return UEFI_RC_ERROR;
-    }
-
     dbPrintf("Attempting to read %d bytes from platdef file\n", PLATDEF_UPDATE_BUF_SZ);
     // read in the apml data.  size was calculated in the find file routine.
     read_count = fread((UINT8 *)platdef_tmp, 1, PLATDEF_UPDATE_BUF_SZ, fptr);

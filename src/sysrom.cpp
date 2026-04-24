@@ -140,10 +140,13 @@ int WriteSmbiosRecords(char path[], char *buffer, int size)
         if (size == -1) {                                     // Starting SMBIOS transaction
             dbPrintf("Starting SMBIOS Download.\n");
             dirVer++;                                         // Increase DirVer by 1 so that SMBIOS MDR updates aswell
-            uint8_t buff[MDRSMBIOSHdr_sz];                    // create buffer
-            memset(buff, 0, MDRSMBIOSHdr_sz);
+            // Reserve space for MDR header + EP so that BIOS records start
+            // exactly at structTableAddr (sizeof(eps)=24 bytes into dataStorage),
+            // avoiding any gap/padding byte between the EP and the first structure.
+            uint8_t buff[MDRSMBIOSHdr_sz + sizeof(struct EntryPointStructure30)];
+            memset(buff, 0, sizeof(buff));
             hexdump(buff, MDRSMBIOSHdr_sz);
-            fwrite(buff, MDRSMBIOSHdr_sz, 1, fptr);
+            fwrite(buff, sizeof(buff), 1, fptr);
             smbios_data_begin();                              // begin the in memory smbios db
             fclose(fptr);
         }
@@ -157,7 +160,7 @@ int WriteSmbiosRecords(char path[], char *buffer, int size)
             mdrHdr->mdrType = mdrTypeII;
             mdrHdr->timestamp = (uint32_t)time(NULL);
             fseek(fptr, 0, SEEK_END);                         // Seek to end of file to get length
-            mdrHdr->dataSize = ftell(fptr) - (sizeof(uint8_t)*10);  // Save length of file - the header
+            mdrHdr->dataSize = ftell(fptr) - (sizeof(uint8_t)*10);  // Save length of file - the MDR header
             dbPrintf("Size of file: %d\n", mdrHdr->dataSize);
             fclose(fptr);
             fptr = fopen(path, "rb+");                        // Move pointer back to start of file

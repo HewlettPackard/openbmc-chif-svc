@@ -225,7 +225,7 @@ void  smbios_data_record(void *p, int len)
 
     /* move insert point in record buffer */
     ii = smbios_load_db.insert;
-    dbPrintf("type: %02x, ii = %d", (UINT8)((smbios_rec_header *)p)->type, ii);
+    dbPrintf("type: %02x, ii = %d\n", (UINT8)((smbios_rec_header *)p)->type, ii);
     smbios_load_db.insert += (len%4)?len+(4-(len%4)):len; //always start at 4-byte boundary
     /* record the the record data */
     memcpy(&smbios_load_db.data[ii], p, (unsigned)len);

@@ -49,7 +49,7 @@ extern void db_smbios_handler(int argc, char *argv[]);
 extern int smbios_cfg_read_into_globalvar();
 extern void dump_apml_segments();
 
-char * version = (char*)"CHIF daemon v2.14";
+char * version = (char*)"CHIF daemon v2.15";
 
 int EVError;
 
